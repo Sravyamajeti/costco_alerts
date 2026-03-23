@@ -179,9 +179,11 @@ def run(single_sku: str | None = None, dry_run: bool = False) -> dict:
 
     print(f"🔍 Checking {len(items)} SKU(s)...")
 
-    # Start the undetected browser
+    # Start the undetected browser with Linux CI flags
     options = uc.ChromeOptions()
     options.headless = True
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
     driver = uc.Chrome(options=options)
 
     results = []
