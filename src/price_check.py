@@ -15,8 +15,8 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
-import requests
 from bs4 import BeautifulSoup
+from scrapling import Fetcher
 
 DB_PATH = Path(__file__).parent.parent / "data" / "costco.db"
 WATCHLIST_PATH = Path(__file__).parent.parent / "watchlist.json"
@@ -78,21 +78,23 @@ def get_skus_to_check(conn: sqlite3.Connection, single_sku: str | None = None) -
 
 def scrape_sku(sku: str) -> dict | None:
     """
-    Fetch Costco.com search results for a SKU.
+    Fetch Costco.com search results for a SKU using Scrapling to bypass 403.
     Returns a dict with current_price, regular_price, offer_end_date, product_url.
     Returns None on failure.
     """
     url = f"https://www.costco.com/s?keyword={sku}"
-    headers = {"User-Agent": random.choice(USER_AGENTS)}
-
+    # Scrapling handles User-Agent rotation and TLS impersonation automatically
+    
     try:
-        resp = requests.get(url, headers=headers, timeout=20)
-        resp.raise_for_status()
-    except requests.RequestException as e:
+        page = Fetcher.fetch(url)
+        if page.status != 200:
+            print(f"  ⚠️  [{sku}] Request failed: HTTP {page.status}")
+            return None
+    except Exception as e:
         print(f"  ⚠️  [{sku}] Request failed: {e}")
         return None
 
-    soup = BeautifulSoup(resp.text, "html.parser")
+    soup = BeautifulSoup(page.text, "html.parser")
 
     # --- Current (offer/member) price ---
     current_price = None
