@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from bs4 import BeautifulSoup
-from scrapling import Fetcher
+import undetected_chromedriver as uc
 
 DB_PATH = Path(__file__).parent.parent / "data" / "costco.db"
 WATCHLIST_PATH = Path(__file__).parent.parent / "watchlist.json"
@@ -76,25 +76,22 @@ def get_skus_to_check(conn: sqlite3.Connection, single_sku: str | None = None) -
     return list(skus.values())
 
 
-def scrape_sku(sku: str) -> dict | None:
+def scrape_sku(sku: str, driver: uc.Chrome) -> dict | None:
     """
-    Fetch Costco.com search results for a SKU using Scrapling to bypass 403.
+    Fetch Costco.com search results for a SKU using undetected-chromedriver.
     Returns a dict with current_price, regular_price, offer_end_date, product_url.
     Returns None on failure.
     """
     url = f"https://www.costco.com/s?keyword={sku}"
-    # Scrapling handles User-Agent rotation and TLS impersonation automatically
     
     try:
-        page = Fetcher.fetch(url)
-        if page.status != 200:
-            print(f"  ⚠️  [{sku}] Request failed: HTTP {page.status}")
-            return None
+        driver.get(url)
+        time.sleep(4)  # Wait for page to fully render/bots to clear
     except Exception as e:
-        print(f"  ⚠️  [{sku}] Request failed: {e}")
+        print(f"  ⚠️  [{sku}] Browser failed: {e}")
         return None
 
-    soup = BeautifulSoup(page.text, "html.parser")
+    soup = BeautifulSoup(driver.page_source, "html.parser")
 
     # --- Current (offer/member) price ---
     current_price = None
@@ -182,33 +179,40 @@ def run(single_sku: str | None = None, dry_run: bool = False) -> dict:
 
     print(f"🔍 Checking {len(items)} SKU(s)...")
 
+    # Start the undetected browser
+    options = uc.ChromeOptions()
+    options.headless = True
+    driver = uc.Chrome(options=options)
+
     results = []
     failed = []
 
-    for i, item in enumerate(items):
-        sku = item["sku"]
-        print(f"  [{i+1}/{len(items)}] SKU {sku} — {item['item_name']}")
-        result = scrape_sku(sku)
+    try:
+        for i, item in enumerate(items):
+            sku = item["sku"]
+            print(f"  [{i+1}/{len(items)}] SKU {sku} — {item['item_name']}")
+            result = scrape_sku(sku, driver)
 
-        if result is None:
-            failed.append(sku)
-        else:
-            result["sku"] = sku
-            result["item_name"] = item["item_name"]
-            results.append(result)
-            print(
-                f"       current=${result['current_price']:.2f}"
-                + (f"  regular=${result['regular_price']:.2f}" if result["regular_price"] else "")
-                + (f"  valid till {result['offer_end_date']}" if result["offer_end_date"] else "")
-            )
-            if not dry_run:
-                store_result(conn, sku, result)
+            if result is None:
+                failed.append(sku)
+            else:
+                result["sku"] = sku
+                result["item_name"] = item["item_name"]
+                results.append(result)
+                print(
+                    f"       current=${result['current_price']:.2f}"
+                    + (f"  regular=${result['regular_price']:.2f}" if result["regular_price"] else "")
+                    + (f"  valid till {result['offer_end_date']}" if result["offer_end_date"] else "")
+                )
+                if not dry_run:
+                    store_result(conn, sku, result)
 
-        # Rate-limit between requests (skip sleep on last item or in dry-run)
-        if i < len(items) - 1 and not dry_run:
-            time.sleep(RATE_LIMIT_SLEEP)
-
-    conn.close()
+            # Rate-limit between requests (skip sleep on last item or in dry-run)
+            if i < len(items) - 1 and not dry_run:
+                time.sleep(RATE_LIMIT_SLEEP)
+    finally:
+        driver.quit()
+        conn.close()
 
     failure_ratio = len(failed) / len(items) if items else 0.0
     if failed:
