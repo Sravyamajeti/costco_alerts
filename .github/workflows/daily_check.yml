@@ -1,0 +1,34 @@
+name: Daily Price Check
+
+on:
+  schedule:
+    - cron: '0 14 * * *'   # 7 AM PST (UTC-7) every day
+  workflow_dispatch:         # allows manual trigger from GitHub UI
+
+jobs:
+  price-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Ingest all CSVs
+        run: |
+          for csv in *.csv; do
+            [ -f "$csv" ] && python src/ingest.py --csv "$csv"
+          done
+
+      - name: Run agent
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: python src/agent.py
