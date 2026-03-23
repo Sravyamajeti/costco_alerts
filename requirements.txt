@@ -1,5 +1,6 @@
 scrapling
 curl_cffi
+playwright
 beautifulsoup4==4.12.3
 python-dotenv==1.0.1
 resend==2.0.0
