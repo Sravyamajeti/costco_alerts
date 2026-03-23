@@ -95,16 +95,29 @@ def scrape_sku(sku: str, driver: uc.Chrome) -> dict | None:
 
     # --- Current (offer/member) price ---
     current_price = None
-    price_el = (
-        soup.find("span", {"automation-id": "unitPrice"})
-        or soup.find("span", class_="price")
-        or soup.find("div", class_="price")
-    )
-    if price_el:
+    
+    # New Costco DOM uses data-testid="single-price-whole-value" and "single-price-decimal-value"
+    whole_el = soup.find(attrs={"data-testid": "Text_single-price-whole-value"})
+    decimal_el = soup.find(attrs={"data-testid": "Text_single-price-decimal-value"})
+    
+    if whole_el and decimal_el:
         try:
-            current_price = float(price_el.get_text(strip=True).replace("$", "").replace(",", ""))
+            current_price = float(f"{whole_el.get_text(strip=True)}.{decimal_el.get_text(strip=True)}")
         except ValueError:
             pass
+
+    # Fallback to old classes just in case some pages are unmigrated
+    if not current_price:
+        price_el = (
+            soup.find("span", {"automation-id": "unitPrice"})
+            or soup.find("span", class_="price")
+            or soup.find("div", class_="price")
+        )
+        if price_el:
+            try:
+                current_price = float(price_el.get_text(strip=True).replace("$", "").replace(",", ""))
+            except ValueError:
+                pass
 
     if not current_price:
         print(f"  ⚠️  [{sku}] Could not parse current price")
@@ -112,28 +125,55 @@ def scrape_sku(sku: str, driver: uc.Chrome) -> dict | None:
 
     # --- Regular (non-sale) price — only present when item is on sale ---
     regular_price = None
-    was_el = (
-        soup.find("div", class_="price-was")
-        or soup.find("span", class_="price-was")
-        or soup.find("s", class_="price")          # strikethrough
-        or soup.find("del")                         # generic strikethrough
-    )
-    if was_el:
+    
+    # New Costco DOM uses data-testid="Text_promo-original-price"
+    promo_el = soup.find(attrs={"data-testid": "Text_promo-original-price"})
+    if promo_el:
         try:
-            regular_price = float(was_el.get_text(strip=True).replace("$", "").replace(",", ""))
+            regular_price = float(promo_el.get_text(strip=True).replace("$", "").replace(",", ""))
         except ValueError:
             pass
 
+    # Fallback to old classes
+    if not regular_price:
+        was_el = (
+            soup.find("div", class_="price-was")
+            or soup.find("span", class_="price-was")
+            or soup.find("s", class_="price")          # strikethrough
+            or soup.find("del")                         # generic strikethrough
+        )
+        if was_el:
+            try:
+                regular_price = float(was_el.get_text(strip=True).replace("$", "").replace(",", ""))
+            except ValueError:
+                pass
+
     # --- Offer end date ---
     offer_end_date = None
-    date_el = (
-        soup.find("span", {"automation-id": "offerEndDate"})
-        or soup.find("div", class_="offer-end-date")
-        or soup.find("span", class_="valid-thru")
-    )
-    if date_el:
-        # Store as raw text; agent.py normalises to YYYY-MM-DD
-        offer_end_date = date_el.get_text(strip=True)
+    
+    # New Costco DOM puts date inside a list item with text like "$X manufacturer's savings is valid X/X/XX through Y/Y/YY."
+    # We will grab all text from `data-testid` starting with `Text_longText` and search for dates
+    long_texts = soup.find_all(attrs={"data-testid": lambda x: x and x.startswith("Text_longText-")})
+    for el in long_texts:
+        text = el.get_text(strip=True)
+        if "valid" in text.lower() and "through" in text.lower():
+            # Roughly extract the second date
+            parts = text.split("through")
+            if len(parts) > 1:
+                # " Y/Y/YY. While supplies last..."
+                date_part = parts[1].strip().split(".")[0].split(" ")[0]
+                offer_end_date = date_part
+                break
+
+    # Fallback
+    if not offer_end_date:
+        date_el = (
+            soup.find("span", {"automation-id": "offerEndDate"})
+            or soup.find("div", class_="offer-end-date")
+            or soup.find("span", class_="valid-thru")
+        )
+        if date_el:
+            offer_end_date = date_el.get_text(strip=True)
 
     return {
         "current_price":  current_price,
@@ -179,11 +219,15 @@ def run(single_sku: str | None = None, dry_run: bool = False) -> dict:
 
     print(f"🔍 Checking {len(items)} SKU(s)...")
 
-    # Start the undetected browser with Linux CI flags
+    # Start the undetected browser with full stealth and Linux CI flags
     options = uc.ChromeOptions()
-    options.headless = True
+    options.headless = False
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--ignore-certificate-errors-spki-list")
+    options.add_argument("--ignore-ssl-errors")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
     driver = uc.Chrome(options=options)
 
     results = []
