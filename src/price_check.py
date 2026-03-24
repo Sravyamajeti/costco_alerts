@@ -61,7 +61,8 @@ def get_skus_to_check(conn: sqlite3.Connection, single_sku: str | None = None) -
         """,
         (cutoff,),
     ).fetchall()
-    for sku, name in rows:
+    for row_sku, name in rows:
+        sku = str(row_sku)
         skus[sku] = {"sku": sku, "item_name": name or sku, "source": "purchase"}
 
     # 2. Watchlist
