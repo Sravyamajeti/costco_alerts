@@ -74,6 +74,17 @@ def get_skus_to_check(conn: sqlite3.Connection, single_sku: str | None = None) -
             if sku not in skus:
                 skus[sku] = {"sku": sku, "item_name": item.get("name", sku), "source": "watchlist"}
 
+    # 3. Exclude fresh items
+    fresh_items_path = Path(__file__).parent.parent / "fresh_items.csv"
+    if fresh_items_path.exists():
+        import csv
+        with open(fresh_items_path, newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                fresh_sku = str(row.get("item_sku", "")).strip()
+                if fresh_sku in skus:
+                    del skus[fresh_sku]
+
     return list(skus.values())
 
 
