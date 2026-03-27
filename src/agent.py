@@ -39,9 +39,10 @@ def get_connection() -> sqlite3.Connection:
 
 def compute_price_protection_alerts(conn: sqlite3.Connection) -> list[dict]:
     """
-    For each SKU bought in the last 30 days, compare purchase price
-    against the most recently scraped current_price.
-    Returns all items where current_price < purchase_price.
+    For each SKU bought in the last 30 days, check if it is currently on sale
+    on Costco Sameday by comparing regular_price and current_price.
+    Since Sameday base prices are marked up, we calculate the explicit discount
+    amount instead of comparing against the warehouse purchase_price.
     """
     cutoff = (date.today() - timedelta(days=30)).isoformat()
 
@@ -53,11 +54,12 @@ def compute_price_protection_alerts(conn: sqlite3.Connection) -> list[dict]:
             MIN(p.unit_price)      AS purchase_price,
             MAX(p.transaction_date) AS purchase_date,
             ph.current_price,
+            ph.regular_price,
             ph.offer_end_date,
             ph.product_url
         FROM purchases p
         JOIN (
-            SELECT item_sku, current_price, offer_end_date, product_url
+            SELECT item_sku, current_price, regular_price, offer_end_date, product_url
             FROM price_history
             WHERE (item_sku, checked_at) IN (
                 SELECT item_sku, MAX(checked_at)
@@ -67,20 +69,22 @@ def compute_price_protection_alerts(conn: sqlite3.Connection) -> list[dict]:
         ) ph ON ph.item_sku = p.item_sku
         WHERE p.transaction_date >= ?
         GROUP BY p.item_sku
-        HAVING ph.current_price IS NOT NULL
-           AND ph.current_price < MIN(p.unit_price)
+        HAVING ph.regular_price IS NOT NULL
+           AND ph.current_price < ph.regular_price
         """,
         (cutoff,),
     ).fetchall()
 
     alerts = []
-    for sku, name, purchase_price, purchase_date, current_price, offer_end_date, product_url in rows:
+    for sku, name, purchase_price, purchase_date, current_price, regular_price, offer_end_date, product_url in rows:
+        savings = round(regular_price - current_price, 2)
         alerts.append({
             "sku":           sku,
             "item_name":     name or sku,
-            "old_price":     purchase_price,
+            "purchase_price": purchase_price,
+            "old_price":     regular_price,
             "new_price":     current_price,
-            "savings":       round(purchase_price - current_price, 2),
+            "savings":       savings,
             "purchase_date": purchase_date,
             "deadline":      offer_end_date,
             "product_url":   product_url,

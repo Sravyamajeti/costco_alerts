@@ -1,5 +1,10 @@
 .env
-data/costco.db
+data/
 __pycache__/
 *.pyc
 .DS_Store
+*.csv
+agent*.log
+*.html
+*.png
+downloaded_files/

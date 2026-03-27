@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from bs4 import BeautifulSoup
-import undetected_chromedriver as uc
+from seleniumbase import SB
 
 DB_PATH = Path(__file__).parent.parent / "data" / "costco.db"
 WATCHLIST_PATH = Path(__file__).parent.parent / "watchlist.json"
@@ -43,6 +43,7 @@ def get_skus_to_check(conn: sqlite3.Connection, single_sku: str | None = None) -
     Includes:
       1. Purchase SKUs within the last 30 days (price protection window).
       2. All watchlist SKUs.
+      3. Fresh item SKUs from fresh_items.csv
     """
     skus: dict[str, dict] = {}
 
@@ -74,118 +75,80 @@ def get_skus_to_check(conn: sqlite3.Connection, single_sku: str | None = None) -
             if sku not in skus:
                 skus[sku] = {"sku": sku, "item_name": item.get("name", sku), "source": "watchlist"}
 
-    # 3. Exclude fresh items
-    fresh_items_path = Path(__file__).parent.parent / "fresh_items.csv"
-    if fresh_items_path.exists():
-        import csv
-        with open(fresh_items_path, newline='', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                fresh_sku = str(row.get("item_sku", "")).strip()
-                if fresh_sku in skus:
-                    del skus[fresh_sku]
-
     return list(skus.values())
 
 
-def scrape_sku(sku: str, driver: uc.Chrome) -> dict | None:
+def scrape_sku(sku: str, driver) -> dict | None:
     """
-    Fetch Costco.com search results for a SKU using undetected-chromedriver.
+    Fetch Costco Sameday (Instacart) search results for a SKU using undetected-chromedriver.
     Returns a dict with current_price, regular_price, offer_end_date, product_url.
     Returns None on failure.
     """
-    url = f"https://www.costco.com/s?keyword={sku}"
+    url = f"https://sameday.costco.com/store/costco/s?k={sku}"
     
     try:
         driver.get(url)
-        time.sleep(4)  # Wait for page to fully render/bots to clear
+        time.sleep(4)  # Wait for page to fetch data via Instacart API
     except Exception as e:
         print(f"  ⚠️  [{sku}] Browser failed: {e}")
         return None
 
+    import re
     soup = BeautifulSoup(driver.page_source, "html.parser")
 
-    # --- Current (offer/member) price ---
+    # Limit search to the first product card to avoid scraping "Related items" carousels
+    card = soup.find(attrs={"aria-label": "product card"})
+    search_context = card if card else soup
+
+    # --- Current price ---
     current_price = None
+    curr_el = search_context.find('span', string=re.compile(r'Current price:', re.IGNORECASE))
     
-    # New Costco DOM uses data-testid="single-price-whole-value" and "single-price-decimal-value"
-    whole_el = soup.find(attrs={"data-testid": "Text_single-price-whole-value"})
-    decimal_el = soup.find(attrs={"data-testid": "Text_single-price-decimal-value"})
-    
-    if whole_el and decimal_el:
+    if curr_el:
         try:
-            current_price = float(f"{whole_el.get_text(strip=True)}.{decimal_el.get_text(strip=True)}")
+            val = curr_el.get_text(strip=True).lower().replace('current price:', '').replace('$', '').replace(',', '').strip()
+            current_price = float(val)
         except ValueError:
             pass
 
-    # Fallback to old classes just in case some pages are unmigrated
     if not current_price:
-        price_el = (
-            soup.find("span", {"automation-id": "unitPrice"})
-            or soup.find("span", class_="price")
-            or soup.find("div", class_="price")
-        )
-        if price_el:
-            try:
-                current_price = float(price_el.get_text(strip=True).replace("$", "").replace(",", ""))
-            except ValueError:
-                pass
-
-    if not current_price:
-        print(f"  ⚠️  [{sku}] Could not parse current price")
+        print(f"  ⚠️  [{sku}] Could not parse current price (maybe out of stock or block)")
         return None
 
-    # --- Regular (non-sale) price — only present when item is on sale ---
+    # --- Regular (non-sale) price ---
     regular_price = None
-    
-    # New Costco DOM uses data-testid="Text_promo-original-price"
-    promo_el = soup.find(attrs={"data-testid": "Text_promo-original-price"})
-    if promo_el:
+    orig_el = search_context.find('span', string=re.compile(r'Original price:', re.IGNORECASE))
+    if orig_el:
         try:
-            regular_price = float(promo_el.get_text(strip=True).replace("$", "").replace(",", ""))
+            val = orig_el.get_text(strip=True).lower().replace('original price:', '').replace('$', '').replace(',', '').strip()
+            regular_price = float(val)
         except ValueError:
             pass
-
-    # Fallback to old classes
-    if not regular_price:
-        was_el = (
-            soup.find("div", class_="price-was")
-            or soup.find("span", class_="price-was")
-            or soup.find("s", class_="price")          # strikethrough
-            or soup.find("del")                         # generic strikethrough
-        )
-        if was_el:
-            try:
-                regular_price = float(was_el.get_text(strip=True).replace("$", "").replace(",", ""))
-            except ValueError:
-                pass
 
     # --- Offer end date ---
     offer_end_date = None
-    
-    # New Costco DOM puts date inside a list item with text like "$X manufacturer's savings is valid X/X/XX through Y/Y/YY."
-    # We will grab all text from `data-testid` starting with `Text_longText` and search for dates
-    long_texts = soup.find_all(attrs={"data-testid": lambda x: x and x.startswith("Text_longText-")})
-    for el in long_texts:
-        text = el.get_text(strip=True)
-        if "valid" in text.lower() and "through" in text.lower():
-            # Roughly extract the second date
-            parts = text.split("through")
-            if len(parts) > 1:
-                # " Y/Y/YY. While supplies last..."
-                date_part = parts[1].strip().split(".")[0].split(" ")[0]
-                offer_end_date = date_part
-                break
-
-    # Fallback
-    if not offer_end_date:
-        date_el = (
-            soup.find("span", {"automation-id": "offerEndDate"})
-            or soup.find("div", class_="offer-end-date")
-            or soup.find("span", class_="valid-thru")
-        )
-        if date_el:
-            offer_end_date = date_el.get_text(strip=True)
+    if regular_price and current_price and current_price < regular_price:
+        a_tag = search_context.find("a", href=True)
+        if a_tag:
+            prod_path = a_tag["href"]
+            if prod_path.startswith("/"):
+                prod_url = "https://sameday.costco.com" + prod_path
+                print(f"  --> Fetching product details for offer end date...")
+                try:
+                    # Navigate to the inner product page
+                    driver.get(prod_url)
+                    time.sleep(3)
+                    prod_soup = BeautifulSoup(driver.page_source, "html.parser")
+                    
+                    # Look for strings like "Ends Mar 29 - Add 1 to qualify for deal"
+                    ends_match = prod_soup.find(string=re.compile(r'Ends\s+[a-zA-Z]{3}\s+\d+', re.IGNORECASE))
+                    if ends_match:
+                        # Extract just the "Mar 29" part
+                        m = re.search(r'Ends\s+([a-zA-Z]{3}\s+\d+)', str(ends_match), re.IGNORECASE)
+                        if m:
+                            offer_end_date = m.group(1)
+                except Exception as e:
+                    print(f"  ⚠️  Could not fetch product details for date: {e}")
 
     return {
         "current_price":  current_price,
@@ -229,48 +192,56 @@ def run(single_sku: str | None = None, dry_run: bool = False) -> dict:
         conn.close()
         return {"results": [], "failed_skus": [], "failure_ratio": 0.0}
 
-    print(f"🔍 Checking {len(items)} SKU(s)...")
-
-    # Start the undetected browser with full stealth and Linux CI flags
-    options = uc.ChromeOptions()
-    options.headless = False
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--ignore-certificate-errors")
-    options.add_argument("--ignore-certificate-errors-spki-list")
-    options.add_argument("--ignore-ssl-errors")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-    driver = uc.Chrome(options=options)
+    print(f"🔍 Checking {len(items)} SKU(s) on Costco Sameday...")
 
     results = []
     failed = []
 
-    try:
-        for i, item in enumerate(items):
-            sku = item["sku"]
-            print(f"  [{i+1}/{len(items)}] SKU {sku} — {item['item_name']}")
-            result = scrape_sku(sku, driver)
+    # Start the undetected browser with full stealth using SeleniumBase
+    with SB(uc=True, headless=True) as sb:
+        driver = sb.driver
 
-            if result is None:
-                failed.append(sku)
-            else:
-                result["sku"] = sku
-                result["item_name"] = item["item_name"]
-                results.append(result)
-                print(
-                    f"       current=${result['current_price']:.2f}"
-                    + (f"  regular=${result['regular_price']:.2f}" if result["regular_price"] else "")
-                    + (f"  valid till {result['offer_end_date']}" if result["offer_end_date"] else "")
-                )
-                if not dry_run:
-                    store_result(conn, sku, result)
+        # By-pass zip code modal required by Instacart
+        try:
+            from selenium.webdriver.common.by import By
+            from selenium.webdriver.common.keys import Keys
+            print("  --> Bypassing Sameday zip code modal...")
+            driver.get('https://sameday.costco.com')
+            time.sleep(5)
+            
+            zip_input = driver.find_element(By.CSS_SELECTOR, 'input[autocomplete="postal-code"]')
+            if zip_input:
+                zip_input.send_keys('94536')
+                zip_input.send_keys(Keys.RETURN)
+                time.sleep(5)
+        except Exception as e:
+            print(f"  --> Note: Zip code bypass skipped or failed (might already be set): {e}")
 
-            # Rate-limit between requests (skip sleep on last item or in dry-run)
-            if i < len(items) - 1 and not dry_run:
-                time.sleep(RATE_LIMIT_SLEEP)
-    finally:
-        driver.quit()
-        conn.close()
+        try:
+            for i, item in enumerate(items):
+                sku = item["sku"]
+                print(f"  [{i+1}/{len(items)}] SKU {sku} — {item['item_name']}")
+                result = scrape_sku(sku, driver)
+
+                if result is None:
+                    failed.append(sku)
+                else:
+                    result["sku"] = sku
+                    result["item_name"] = item["item_name"]
+                    results.append(result)
+                    print(
+                        f"       current=${result['current_price']:.2f}"
+                        + (f"  regular=${result['regular_price']:.2f}" if result["regular_price"] else "")
+                        + (f"  valid till {result['offer_end_date']}" if result["offer_end_date"] else "")
+                    )
+                    if not dry_run:
+                        store_result(conn, sku, result)
+
+                # Rate-limit between requests (skip sleep on last item or in dry-run)
+                if i < len(items) - 1 and not dry_run:
+                    time.sleep(RATE_LIMIT_SLEEP)
+        finally:
+            conn.close()
 
     failure_ratio = len(failed) / len(items) if items else 0.0
     if failed:

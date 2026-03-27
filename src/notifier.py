@@ -43,15 +43,17 @@ def build_digest_html(
     if price_alerts:
         rows = ""
         for item in price_alerts:
+            deadline_str = f'<span style="color:#dc2626;">⚠️ Offer valid until: {_offer_date_str(item.get("deadline"))}</span><br>' if item.get('deadline') else ''
             rows += f"""
             <tr>
               <td style="padding:12px 0; border-bottom:1px solid #f0f0f0;">
                 <strong>{item['item_name']}</strong><br>
-                <span style="color:#888;">You paid: {_format_currency(item['old_price'])}
+                <span style="color:#888;">You paid: {_format_currency(item.get('purchase_price', item['old_price']))}
                   on {item.get('purchase_date','—')}</span><br>
-                Now: <strong style="color:#16a34a;">{_format_currency(item['new_price'])}</strong>
+                Sameday pricing: <span style="text-decoration:line-through; color:#888;">{_format_currency(item['old_price'])}</span>
+                → <strong style="color:#16a34a;">{_format_currency(item['new_price'])}</strong>
                 <span style="color:#16a34a;">(↓ {_format_currency(item['savings'])} off)</span><br>
-                <span style="color:#dc2626;">⚠️ Offer valid until: {_offer_date_str(item.get('deadline'))}</span><br>
+                {deadline_str}
                 <a href="{item['product_url']}" style="color:#0070cc;">→ View on Costco.com</a>
               </td>
             </tr>"""
@@ -180,6 +182,7 @@ def _test_email() -> None:
     test_price_alerts = [
         {
             "item_name":    "Organic Avocado Hass Variety, 6-count",
+            "purchase_price": 6.99,
             "old_price":    7.99,
             "new_price":    5.99,
             "savings":      2.00,

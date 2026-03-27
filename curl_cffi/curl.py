@@ -1,0 +1,1 @@
+class CurlError(Exception): pass
