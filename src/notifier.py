@@ -89,6 +89,17 @@ def build_digest_html(
         <table width="100%" cellpadding="0" cellspacing="0">{rows}</table>
         """)
 
+    # ── No-alerts section ─────────────────────────────────────────────────────
+    if not sections:
+        sections.append("""
+        <div style="text-align:center; padding:32px 0;">
+          <span style="font-size:48px;">✅</span>
+          <h2 style="color:#16a34a; margin:12px 0 4px;">All clear today!</h2>
+          <p style="color:#888; margin:0;">No price drops or watchlist sales found.<br>
+          The agent ran successfully and is monitoring your items.</p>
+        </div>
+        """)
+
     body = "\n".join(sections)
 
     return f"""
@@ -112,14 +123,14 @@ def send_daily_digest(
     watchlist_hits: list[dict],
     dry_run: bool = False,
 ) -> None:
-    if not price_alerts and not watchlist_hits:
-        print("No alerts today — no digest email sent.")
-        return
-
     n_drops = len(price_alerts)
     n_sales = len(watchlist_hits)
     today = date.today().strftime("%b %d")
-    subject = f"🛒 Costco Daily Alert — {n_drops} price drop{'s' if n_drops!=1 else ''}, {n_sales} watchlist sale{'s' if n_sales!=1 else ''} ({today})"
+
+    if not price_alerts and not watchlist_hits:
+        subject = f"✅ Costco Daily Check-in — All clear ({today})"
+    else:
+        subject = f"🛒 Costco Daily Alert — {n_drops} price drop{'s' if n_drops!=1 else ''}, {n_sales} watchlist sale{'s' if n_sales!=1 else ''} ({today})"
 
     html = build_digest_html(price_alerts, watchlist_hits)
 

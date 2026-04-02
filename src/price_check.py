@@ -175,6 +175,32 @@ def store_result(conn: sqlite3.Connection, sku: str, result: dict) -> None:
     conn.commit()
 
 
+def _make_browser():
+    """Start a new SeleniumBase browser and set the zip code."""
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+
+    # headless2 uses Chrome's new --headless=new flag — much harder to detect
+    # than the old headless mode and works without a display server (launchd/cron)
+    context = SB(uc=True, headless2=True)
+    sb = context.__enter__()
+    driver = sb.driver
+
+    try:
+        print("  --> Bypassing Sameday zip code modal...")
+        driver.get("https://sameday.costco.com")
+        time.sleep(5)
+        zip_input = driver.find_element(By.CSS_SELECTOR, 'input[autocomplete="postal-code"]')
+        if zip_input:
+            zip_input.send_keys("94536")
+            zip_input.send_keys(Keys.RETURN)
+            time.sleep(5)
+    except Exception as e:
+        print(f"  --> Note: Zip code bypass skipped or failed: {e}")
+
+    return context, sb, driver
+
+
 def run(single_sku: str | None = None, dry_run: bool = False) -> dict:
     """
     Main entry point. Returns a summary dict:
@@ -196,52 +222,56 @@ def run(single_sku: str | None = None, dry_run: bool = False) -> dict:
 
     results = []
     failed = []
+    context = sb = driver = None
 
-    # Start the undetected browser with full stealth using SeleniumBase
-    with SB(uc=True, headless=True) as sb:
-        driver = sb.driver
+    try:
+        context, sb, driver = _make_browser()
 
-        # By-pass zip code modal required by Instacart
-        try:
-            from selenium.webdriver.common.by import By
-            from selenium.webdriver.common.keys import Keys
-            print("  --> Bypassing Sameday zip code modal...")
-            driver.get('https://sameday.costco.com')
-            time.sleep(5)
-            
-            zip_input = driver.find_element(By.CSS_SELECTOR, 'input[autocomplete="postal-code"]')
-            if zip_input:
-                zip_input.send_keys('94536')
-                zip_input.send_keys(Keys.RETURN)
-                time.sleep(5)
-        except Exception as e:
-            print(f"  --> Note: Zip code bypass skipped or failed (might already be set): {e}")
+        for i, item in enumerate(items):
+            sku = item["sku"]
+            print(f"  [{i+1}/{len(items)}] SKU {sku} — {item['item_name']}")
 
-        try:
-            for i, item in enumerate(items):
-                sku = item["sku"]
-                print(f"  [{i+1}/{len(items)}] SKU {sku} — {item['item_name']}")
-                result = scrape_sku(sku, driver)
+            result = scrape_sku(sku, driver)
 
-                if result is None:
-                    failed.append(sku)
-                else:
-                    result["sku"] = sku
-                    result["item_name"] = item["item_name"]
-                    results.append(result)
-                    print(
-                        f"       current=${result['current_price']:.2f}"
-                        + (f"  regular=${result['regular_price']:.2f}" if result["regular_price"] else "")
-                        + (f"  valid till {result['offer_end_date']}" if result["offer_end_date"] else "")
-                    )
-                    if not dry_run:
-                        store_result(conn, sku, result)
+            # If the session died, restart the browser once and retry this SKU
+            if result is None:
+                print(f"  --> Session may be dead — restarting browser and retrying {sku}...")
+                try:
+                    context.__exit__(None, None, None)
+                except Exception:
+                    pass
+                try:
+                    context, sb, driver = _make_browser()
+                    result = scrape_sku(sku, driver)
+                except Exception as e:
+                    print(f"  ⚠️  [{sku}] Browser restart failed: {e}")
+                    result = None
 
-                # Rate-limit between requests (skip sleep on last item or in dry-run)
-                if i < len(items) - 1 and not dry_run:
-                    time.sleep(RATE_LIMIT_SLEEP)
-        finally:
-            conn.close()
+            if result is None:
+                failed.append(sku)
+            else:
+                result["sku"] = sku
+                result["item_name"] = item["item_name"]
+                results.append(result)
+                print(
+                    f"       current=${result['current_price']:.2f}"
+                    + (f"  regular=${result['regular_price']:.2f}" if result["regular_price"] else "")
+                    + (f"  valid till {result['offer_end_date']}" if result["offer_end_date"] else "")
+                )
+                if not dry_run:
+                    store_result(conn, sku, result)
+
+            # Rate-limit between requests (skip sleep on last item or in dry-run)
+            if i < len(items) - 1 and not dry_run:
+                time.sleep(RATE_LIMIT_SLEEP)
+
+    finally:
+        if context is not None:
+            try:
+                context.__exit__(None, None, None)
+            except Exception:
+                pass
+        conn.close()
 
     failure_ratio = len(failed) / len(items) if items else 0.0
     if failed:

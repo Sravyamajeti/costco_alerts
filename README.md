@@ -22,6 +22,6 @@ pip install -r requirements.txt
 - `resend` (for email notifications)
 
 ## Usage
-1. Configure your `.env` file with necessary credentials (e.g., email API keys).
+1. Configure your `.env` file with necessary credentials (e.g., email id).
 2. Ensure your purchase data CSV (e.g., `past_data.csv`) is properly formatted.
 3. Run the tracking agent to check prices and dispatch notifications.
