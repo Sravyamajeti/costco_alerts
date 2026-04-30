@@ -66,6 +66,7 @@ def compute_price_protection_alerts(conn: sqlite3.Connection) -> list[dict]:
                 FROM price_history
                 GROUP BY item_sku
             )
+            AND checked_at >= datetime('now', '-2 days')
         ) ph ON ph.item_sku = p.item_sku
         WHERE p.transaction_date >= ?
         GROUP BY p.item_sku
@@ -133,12 +134,17 @@ def run(dry_run: bool = False) -> None:
     watchlist_hits = watchlist_module.get_watchlist_sales(conn)
     conn.close()
 
+    is_failure = failure_ratio > price_check_module.FAILURE_THRESHOLD
+
     # ── Step 5: Send daily digest ─────────────────────────────────────────────
     print("\n📧 Sending notifications...")
-    notifier.send_daily_digest(price_alerts, watchlist_hits, dry_run=dry_run)
+    if not is_failure:
+        notifier.send_daily_digest(price_alerts, watchlist_hits, dry_run=dry_run)
+    else:
+        print("  Skipping daily digest because scraper failed (preventing stale deals from sending).")
 
     # ── Step 6: Send scraper failure alert ───────────────────────────────────
-    if failure_ratio > price_check_module.FAILURE_THRESHOLD:
+    if is_failure:
         notifier.send_scraper_failure_alert(failed_count, total_checked, dry_run=dry_run)
 
     print(f"\n✅ Done. {len(price_alerts)} price drop(s), {len(watchlist_hits)} watchlist sale(s).\n")

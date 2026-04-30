@@ -78,7 +78,29 @@ def get_skus_to_check(conn: sqlite3.Connection, single_sku: str | None = None) -
     return list(skus.values())
 
 
-def scrape_sku(sku: str, driver) -> dict | None:
+def names_match(expected: str, scraped: str) -> bool:
+    import re
+    def normalize(text):
+        if not text: return set()
+        text = re.sub(r'[^a-z0-9\s]', ' ', text.lower())
+        words = set(text.split())
+        # Remove very common generic Costco words to prevent false overlap
+        stopwords = {"kirkland", "signature"}
+        return words - stopwords
+    
+    expected_words = normalize(expected)
+    scraped_words = normalize(scraped)
+    if not expected_words or not scraped_words:
+        return False
+        
+    overlap = expected_words.intersection(scraped_words)
+    # Require at least 55% of expected specific words to be in the scraped name
+    if len(overlap) / len(expected_words) >= 0.55:
+        return True
+    return False
+
+
+def scrape_sku(sku: str, expected_name: str, driver) -> dict | None:
     """
     Fetch Costco Sameday (Instacart) search results for a SKU using undetected-chromedriver.
     Returns a dict with current_price, regular_price, offer_end_date, product_url.
@@ -93,16 +115,55 @@ def scrape_sku(sku: str, driver) -> dict | None:
         print(f"  ⚠️  [{sku}] Browser failed: {e}")
         return None
 
-    import re
-    soup = BeautifulSoup(driver.page_source, "html.parser")
+    try:
+        page_src = driver.page_source
+    except Exception as e:
+        print(f"  ⚠️  [{sku}] Failed to read page source: {e}")
+        return None
 
-    # Limit search to the first product card to avoid scraping "Related items" carousels
-    card = soup.find(attrs={"aria-label": "product card"})
-    search_context = card if card else soup
+    if not page_src:
+        print(f"  ⚠️  [{sku}] Empty page source")
+        return None
+
+    import re
+    soup = BeautifulSoup(page_src, "html.parser")
+
+    # Limit search context by finding the price element and going upwards
+    curr_el = soup.find('span', string=re.compile(r'Current price:', re.IGNORECASE))
+    search_context = soup
+
+    if curr_el:
+        parent = curr_el.parent
+        for _ in range(7):  # Go up a few levels to capture the card
+            if parent and parent.name != "body":
+                # Only set if it has an image or heading
+                if parent.find('img', alt=True) or parent.find(attrs={"role": "heading"}):
+                    search_context = parent
+                parent = parent.parent
+
+    scraped_name = ""
+    # Look for role="heading" for product name (new layout)
+    headings = search_context.find_all(attrs={"role": "heading"})
+    if headings:
+        for h in headings:
+            txt = h.get_text(strip=True)
+            if txt and len(txt) > 5 and "Costco Same-Day" not in txt:
+                scraped_name = txt
+                break
+
+    if not scraped_name:
+        for img in search_context.find_all('img', alt=True):
+            alt_text = img.get('alt', '')
+            if alt_text and "Costco Same-Day" not in alt_text:
+                scraped_name = alt_text
+                break
+        
+    if scraped_name and not names_match(expected_name, scraped_name):
+        print(f"  ⚠️  [{sku}] Name mismatch: expected '{expected_name}', got '{scraped_name}'")
+        return {"error": "mismatch"}
 
     # --- Current price ---
     current_price = None
-    curr_el = search_context.find('span', string=re.compile(r'Current price:', re.IGNORECASE))
     
     if curr_el:
         try:
@@ -187,16 +248,33 @@ def _make_browser():
     driver = sb.driver
 
     try:
-        print("  --> Bypassing Sameday zip code modal...")
+        print("  --> Bypassing Sameday location modal...")
         driver.get("https://sameday.costco.com")
         time.sleep(5)
-        zip_input = driver.find_element(By.CSS_SELECTOR, 'input[autocomplete="postal-code"]')
-        if zip_input:
-            zip_input.send_keys("94536")
-            zip_input.send_keys(Keys.RETURN)
-            time.sleep(5)
+        
+        # The zip code modal is a simple form with Start Shopping
+        try:
+            zip_input = driver.find_element(By.CSS_SELECTOR, 'input[autocomplete="postal-code"]')
+            if zip_input:
+                zip_input.clear()
+                zip_input.send_keys("94536")
+                time.sleep(2)
+                
+                # Click the "Start Shopping" button
+                start_btns = driver.find_elements(By.XPATH, "//button[contains(., 'Start Shopping')]")
+                if start_btns:
+                    for btn in start_btns:
+                        if btn.is_displayed():
+                            btn.click()
+                            time.sleep(4)
+                            break
+                else:
+                    zip_input.send_keys(Keys.RETURN)
+                    time.sleep(4)
+        except Exception:
+            pass
     except Exception as e:
-        print(f"  --> Note: Zip code bypass skipped or failed: {e}")
+        print(f"  --> Note: Location bypass skipped or failed: {e}")
 
     return context, sb, driver
 
@@ -231,7 +309,7 @@ def run(single_sku: str | None = None, dry_run: bool = False) -> dict:
             sku = item["sku"]
             print(f"  [{i+1}/{len(items)}] SKU {sku} — {item['item_name']}")
 
-            result = scrape_sku(sku, driver)
+            result = scrape_sku(sku, item["item_name"], driver)
 
             # If the session died, restart the browser once and retry this SKU
             if result is None:
@@ -242,12 +320,15 @@ def run(single_sku: str | None = None, dry_run: bool = False) -> dict:
                     pass
                 try:
                     context, sb, driver = _make_browser()
-                    result = scrape_sku(sku, driver)
+                    result = scrape_sku(sku, item["item_name"], driver)
                 except Exception as e:
                     print(f"  ⚠️  [{sku}] Browser restart failed: {e}")
                     result = None
 
             if result is None:
+                failed.append(sku)
+            elif result.get("error") == "mismatch":
+                print(f"  --> Skipping due to name mismatch")
                 failed.append(sku)
             else:
                 result["sku"] = sku

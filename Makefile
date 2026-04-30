@@ -2,7 +2,7 @@
 # Costco Price Protection Agent — Makefile
 # ──────────────────────────────────────────────────────────────────────────────
 
-PYTHON  = python3
+PYTHON  = /Library/Frameworks/Python.framework/Versions/3.12/bin/python3
 SRC_DIR = src
 LOG     = agent.log
 PLIST   = $(HOME)/Library/LaunchAgents/com.sravya.costco-agent.plist
@@ -52,8 +52,12 @@ status:
 		echo ""; \
 		grep -A2 "Costco Agent — $(TODAY)" $(LOG) | tail -3; \
 		echo ""; \
-		LAST_LINE=$$(grep "Done\." $(LOG) | tail -1); \
-		echo "  Last result: $$LAST_LINE"; \
+		LAST_LINE=$$(awk "/Costco Agent — $$(date '+%Y-%m-%d')/,0" $(LOG) | grep "Done\." | tail -1); \
+		if [ -n "$$LAST_LINE" ]; then \
+			echo "  Last result: $$LAST_LINE"; \
+		else \
+			echo "  Last result: ❌ Crashed or still running"; \
+		fi \
 	else \
 		echo "  ❌ NO — agent has NOT run today yet"; \
 		LAST=$$(grep "Costco Agent —" $(LOG) | tail -1); \

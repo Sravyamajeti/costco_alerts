@@ -41,6 +41,7 @@ def get_watchlist_sales(conn: sqlite3.Connection) -> list[dict]:
             SELECT regular_price, current_price, offer_end_date, product_url
             FROM price_history
             WHERE item_sku = ?
+              AND checked_at >= datetime('now', '-2 days')
             ORDER BY checked_at DESC
             LIMIT 1
             """,

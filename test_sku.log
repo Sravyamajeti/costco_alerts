@@ -1,0 +1,48 @@
+Traceback (most recent call last):
+  File "/Users/sravya/costco/test_sku.py", line 10, in <module>
+    driver = uc.Chrome(options=options)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/undetected_chromedriver/__init__.py", line 466, in __init__
+    super(Chrome, self).__init__(
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/selenium/webdriver/chrome/webdriver.py", line 45, in __init__
+    super().__init__(
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/selenium/webdriver/chromium/webdriver.py", line 66, in __init__
+    super().__init__(command_executor=executor, options=self.options)
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/selenium/webdriver/common/webdriver.py", line 25, in __init__
+    super().__init__(*args, **kwargs)
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/selenium/webdriver/remote/webdriver.py", line 271, in __init__
+    self.start_session(capabilities)
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/undetected_chromedriver/__init__.py", line 724, in start_session
+    super(selenium.webdriver.chrome.webdriver.WebDriver, self).start_session(
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/selenium/webdriver/remote/webdriver.py", line 366, in start_session
+    response = self.execute(Command.NEW_SESSION, caps)["value"]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/selenium/webdriver/remote/webdriver.py", line 446, in execute
+    self.error_handler.check_response(response)
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/selenium/webdriver/remote/errorhandler.py", line 232, in check_response
+    raise exception_class(message, screen, stacktrace)
+selenium.common.exceptions.SessionNotCreatedException: Message: session not created: cannot connect to chrome at 127.0.0.1:52254
+from session not created: This version of ChromeDriver only supports Chrome version 147
+Current browser version is 146.0.7680.178; For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#sessionnotcreatedexception
+Stacktrace:
+0   undetected_chromedriver             0x0000000103fff3e8 undetected_chromedriver + 6792168
+1   undetected_chromedriver             0x0000000103ff6a7a undetected_chromedriver + 6756986
+2   undetected_chromedriver             0x00000001039f3815 undetected_chromedriver + 452629
+3   undetected_chromedriver             0x0000000103a37009 undetected_chromedriver + 729097
+4   undetected_chromedriver             0x0000000103a35e21 undetected_chromedriver + 724513
+5   undetected_chromedriver             0x0000000103a2ab59 undetected_chromedriver + 678745
+6   undetected_chromedriver             0x0000000103a7c1aa undetected_chromedriver + 1012138
+7   undetected_chromedriver             0x0000000103a7b86c undetected_chromedriver + 1009772
+8   undetected_chromedriver             0x0000000103a3a147 undetected_chromedriver + 741703
+9   undetected_chromedriver             0x0000000103a3af21 undetected_chromedriver + 745249
+10  undetected_chromedriver             0x0000000103fb71a7 undetected_chromedriver + 6496679
+11  undetected_chromedriver             0x0000000103fbb5e6 undetected_chromedriver + 6514150
+12  undetected_chromedriver             0x0000000103f97e6a undetected_chromedriver + 6368874
+13  undetected_chromedriver             0x0000000103fbc058 undetected_chromedriver + 6516824
+14  undetected_chromedriver             0x0000000103f87520 undetected_chromedriver + 6300960
+15  undetected_chromedriver             0x0000000103fe3cd8 undetected_chromedriver + 6679768
+16  undetected_chromedriver             0x0000000103fe3e92 undetected_chromedriver + 6680210
+17  undetected_chromedriver             0x0000000103ff6691 undetected_chromedriver + 6755985
+18  libsystem_pthread.dylib             0x00007ff80109718b _pthread_start + 99
+19  libsystem_pthread.dylib             0x00007ff801092ae3 thread_start + 15
+
